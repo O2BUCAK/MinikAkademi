@@ -1,0 +1,17 @@
+{
+  "collections": {
+    "users": {
+      "schema": {
+        "displayName": "string",
+        "email": "string",
+        "xp": "number",
+        "parentPasscode": "string",
+        "playtimeLimit": "number",
+        "createdAt": "string",
+        "lastActive": "string",
+        "lang": "string"
+      },
+      "indexes": []
+    }
+  }
+}

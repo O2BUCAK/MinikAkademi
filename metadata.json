@@ -1,0 +1,6 @@
+{
+  "name": "Kids Learning & Writing App",
+  "description": "Interactive Turkish and English learning app for kids to learn colors, numbers, alphabet, and practice writing letters with a fun drawing board.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
