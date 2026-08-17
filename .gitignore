@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+credentials.json
+serviceAccountKey*.json
+*.pem
+*.key
+.aistudio/

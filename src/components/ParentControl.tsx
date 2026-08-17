@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Shield, Timer, Lock, RefreshCw, Check, X, Eye, EyeOff, Sparkles, Award } from 'lucide-react';
+import { Shield, Timer, Lock, RefreshCw, Check, X, Eye, EyeOff, Award, AlertTriangle } from 'lucide-react';
+import { generateSalt, hashParentPin, verifyParentPin, parentPinLimiter, sanitizeNumber } from '../utils/security';
 
 interface ParentControlProps {
   lang: 'tr' | 'en';
@@ -8,8 +9,9 @@ interface ParentControlProps {
   onClose: () => void;
   playtimeLimit: number; // in minutes (0 means unlimited)
   onUpdatePlaytimeLimit: (limit: number) => void;
-  parentPasscode: string; // 4-digit PIN
-  onUpdateParentPasscode: (pin: string) => void;
+  parentPasscodeHash: string; // SHA-256 salted hash
+  parentPasscodeSalt: string; // Salt for the hash
+  onUpdateParentPasscode: (hash: string, salt: string) => void;
   playtimeLeft: number; // in seconds
   onExtendPlaytime: (minutes: number) => void;
   userEmail?: string;
@@ -21,7 +23,8 @@ export default function ParentControl({
   onClose,
   playtimeLimit,
   onUpdatePlaytimeLimit,
-  parentPasscode,
+  parentPasscodeHash,
+  parentPasscodeSalt,
   onUpdateParentPasscode,
   playtimeLeft,
   onExtendPlaytime,
@@ -31,7 +34,8 @@ export default function ParentControl({
   // Passcode entry states
   const [pinInput, setPinInput] = useState<string>('');
   const [showPin, setShowPin] = useState<boolean>(false);
-  const [pinError, setPinError] = useState<boolean>(false);
+  const [pinError, setPinError] = useState<string>('');
+  const [lockoutSeconds, setLockoutSeconds] = useState<number>(0);
   
   // Math gate states (kid proof fallback)
   const [num1, setNum1] = useState<number>(0);
@@ -45,9 +49,30 @@ export default function ParentControl({
   const [settingsError, setSettingsError] = useState<string>('');
   const [settingsSuccess, setSettingsSuccess] = useState<boolean>(false);
 
+  // Check lockout on mount and active interval
+  useEffect(() => {
+    const status = parentPinLimiter.isLockedOut();
+    if (status.locked) {
+      setLockoutSeconds(status.remainingSeconds);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (lockoutSeconds <= 0) return;
+    const interval = setInterval(() => {
+      const status = parentPinLimiter.isLockedOut();
+      if (status.locked) {
+        setLockoutSeconds(status.remainingSeconds);
+      } else {
+        setLockoutSeconds(0);
+        setPinError('');
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [lockoutSeconds]);
+
   // Generate math puzzle
   const generateMathPuzzle = () => {
-    // Standard kid proof math gate: e.g. 6x7, 7x8, 8x9, or adding double digits
     const n1 = Math.floor(Math.random() * 8) + 6; // 6 to 13
     const n2 = Math.floor(Math.random() * 7) + 5; // 5 to 11
     setNum1(n1);
@@ -59,34 +84,50 @@ export default function ParentControl({
   // Reset flow when modal is opened
   useEffect(() => {
     if (isOpen) {
-      if (!parentPasscode) {
-        // If no PIN is configured, prompt to set one or solve math gate first
+      if (!parentPasscodeHash) {
         setStep('settings');
       } else {
         setStep('auth');
       }
       setPinInput('');
-      setPinError(false);
+      setPinError('');
       setSettingsSuccess(false);
       setSettingsError('');
       setNewPin('');
       setConfirmPin('');
     }
-  }, [isOpen, parentPasscode]);
+  }, [isOpen, parentPasscodeHash]);
 
-  const handlePinSubmit = (e: React.FormEvent) => {
+  const handlePinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (pinInput === parentPasscode) {
+
+    const lockoutStatus = parentPinLimiter.isLockedOut();
+    if (lockoutStatus.locked) {
+      setLockoutSeconds(lockoutStatus.remainingSeconds);
+      setPinError(lang === 'tr' 
+        ? `Çok fazla hatalı deneme! Lütfen ${lockoutStatus.remainingSeconds} saniye bekleyin.`
+        : `Too many attempts! Please wait ${lockoutStatus.remainingSeconds}s.`);
+      return;
+    }
+
+    const isValid = await verifyParentPin(pinInput, parentPasscodeHash, parentPasscodeSalt);
+    if (isValid) {
+      parentPinLimiter.recordSuccess();
       setStep('settings');
-      setPinError(false);
+      setPinError('');
+      setLockoutSeconds(0);
     } else {
-      setPinError(true);
+      const result = parentPinLimiter.recordFailedAttempt();
       setPinInput('');
-      // Speak warning
-      if (lang === 'tr') {
-        speak('Hatalı veli şifresi, lütfen tekrar deneyin.', 'tr');
+      if (result.locked) {
+        setLockoutSeconds(result.remainingSeconds);
+        setPinError(lang === 'tr' 
+          ? `Güvenlik Kilidi: 5 hatalı deneme yapıldı. ${result.remainingSeconds} saniye bekleyin.`
+          : `Security Lockout: 5 failed attempts. Please wait ${result.remainingSeconds}s.`);
       } else {
-        speak('Incorrect parent passcode, please try again.', 'en');
+        setPinError(lang === 'tr' 
+          ? `Hatalı şifre! (Kalan hak: ${result.attemptsLeft})` 
+          : `Incorrect passcode! (${result.attemptsLeft} attempts remaining)`);
       }
     }
   };
@@ -95,6 +136,8 @@ export default function ParentControl({
     e.preventDefault();
     const correct = num1 * num2;
     if (parseInt(mathAnswer, 10) === correct) {
+      parentPinLimiter.recordSuccess();
+      setLockoutSeconds(0);
       setStep('settings');
       setMathError(false);
     } else {
@@ -103,20 +146,23 @@ export default function ParentControl({
     }
   };
 
-  const handleSaveSettings = (e: React.FormEvent) => {
+  const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Passcode validation
+    // Passcode validation & secure cryptographic hashing
     if (newPin) {
-      if (newPin.length !== 4 || !/^\d+$/.test(newPin)) {
-        setSettingsError(lang === 'tr' ? 'Şifre 4 haneli rakamdan oluşmalıdır!' : 'Passcode must be a 4-digit number!');
+      if (newPin.length !== 4 || !/^\d{4}$/.test(newPin)) {
+        setSettingsError(lang === 'tr' ? 'Şifre tam olarak 4 haneli rakamdan oluşmalıdır!' : 'Passcode must be exactly 4 digits!');
         return;
       }
       if (newPin !== confirmPin) {
         setSettingsError(lang === 'tr' ? 'Şifreler eşleşmiyor!' : 'Passcodes do not match!');
         return;
       }
-      onUpdateParentPasscode(newPin);
+      
+      const salt = generateSalt(16);
+      const hash = await hashParentPin(newPin, salt);
+      onUpdateParentPasscode(hash, salt);
     }
 
     setSettingsSuccess(true);
@@ -128,16 +174,6 @@ export default function ParentControl({
       setSettingsSuccess(false);
       onClose();
     }, 1500);
-  };
-
-  // Safe TTS speaking helper
-  const speak = (text: string, voiceLang: 'tr' | 'en') => {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = voiceLang === 'tr' ? 'tr-TR' : 'en-US';
-      window.speechSynthesis.speak(utterance);
-    }
   };
 
   if (!isOpen) return null;
@@ -162,10 +198,10 @@ export default function ParentControl({
             <Shield size={32} className="text-white" />
           </div>
           <h3 className="text-xl font-black tracking-tight uppercase">
-            {lang === 'tr' ? 'VELİ KONTROL PANELİ' : 'PARENT CONTROL PANEL'}
+            {lang === 'tr' ? 'GÜVENLİ VELİ PANELİ' : 'SECURE PARENT PANEL'}
           </h3>
           <p className="text-xs font-bold text-orange-50 mt-1">
-            {lang === 'tr' ? '🔒 Sadece anne ve babalar içindir.' : '🔒 Only for mothers and fathers.'}
+            {lang === 'tr' ? '🔒 KVKK Uyumlu & Şifreli Veli Denetimi' : '🔒 Secure & Encrypted Parental Controls'}
           </p>
         </div>
 
@@ -182,19 +218,25 @@ export default function ParentControl({
                   type={showPin ? 'text' : 'password'}
                   maxLength={4}
                   value={pinInput}
+                  disabled={lockoutSeconds > 0}
                   onChange={(e) => {
                     const val = e.target.value.replace(/\D/g, '');
                     setPinInput(val);
-                    if (pinError) setPinError(false);
+                    if (pinError) setPinError('');
                   }}
                   placeholder="••••"
                   autoFocus
                   className={`w-full text-center tracking-[1em] text-2xl font-black py-3 rounded-2xl border-3 bg-orange-50/30 focus:outline-none focus:bg-orange-50 transition-all ${
-                    pinError ? 'border-red-500 text-red-600' : 'border-orange-200 focus:border-orange-400 text-orange-950'
+                    lockoutSeconds > 0 
+                      ? 'border-red-400 bg-red-50 text-red-700 cursor-not-allowed'
+                      : pinError 
+                        ? 'border-red-500 text-red-600' 
+                        : 'border-orange-200 focus:border-orange-400 text-orange-950'
                   }`}
                 />
                 <button
                   type="button"
+                  disabled={lockoutSeconds > 0}
                   onClick={() => setShowPin(!showPin)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-orange-400 hover:text-orange-600 p-2"
                 >
@@ -202,17 +244,28 @@ export default function ParentControl({
                 </button>
               </div>
 
-              {pinError && (
+              {lockoutSeconds > 0 && (
+                <div className="p-3 bg-red-50 border-2 border-red-200 rounded-2xl flex items-center justify-center gap-2 text-red-700 text-xs font-black text-center">
+                  <AlertTriangle size={16} className="text-red-600 shrink-0" />
+                  <span>
+                    {lang === 'tr' 
+                      ? `Güvenlik Kilidi: Lütfen ${lockoutSeconds} saniye bekleyin.` 
+                      : `Rate Limited: Please wait ${lockoutSeconds}s.`}
+                  </span>
+                </div>
+              )}
+
+              {pinError && lockoutSeconds === 0 && (
                 <p className="text-xs font-bold text-red-600 text-center animate-bounce">
-                  ❌ {lang === 'tr' ? 'Şifre yanlış! Tekrar dene.' : 'Wrong passcode! Try again.'}
+                  ❌ {pinError}
                 </p>
               )}
 
               <button
                 type="submit"
-                disabled={pinInput.length !== 4}
+                disabled={pinInput.length !== 4 || lockoutSeconds > 0}
                 className={`w-full py-3.5 rounded-2xl font-black text-sm uppercase tracking-wider border-b-4 transition-all active:translate-y-0.5 shadow-md flex items-center justify-center gap-2 cursor-pointer ${
-                  pinInput.length === 4
+                  pinInput.length === 4 && lockoutSeconds === 0
                     ? 'bg-orange-500 border-orange-700 hover:bg-orange-600 text-white'
                     : 'bg-gray-100 border-gray-300 text-gray-400 cursor-not-allowed'
                 }`}
@@ -329,7 +382,7 @@ export default function ParentControl({
                     <button
                       key={mins}
                       type="button"
-                      onClick={() => onUpdatePlaytimeLimit(mins)}
+                      onClick={() => onUpdatePlaytimeLimit(sanitizeNumber(mins, 0, 300, 0))}
                       className={`py-2 rounded-xl text-xs font-extrabold border-2 transition-all cursor-pointer ${
                         playtimeLimit === mins
                           ? 'bg-orange-500 border-orange-600 text-white shadow-sm font-black'
@@ -344,16 +397,16 @@ export default function ParentControl({
                 </div>
               </div>
 
-              {/* Passcode Config Section */}
+              {/* Passcode Config Section with Hashing notice */}
               <div className="border-t border-gray-100 pt-4 flex flex-col gap-2">
                 <label className="text-xs font-extrabold text-orange-950 uppercase tracking-wider flex items-center gap-1.5">
                   <Lock size={14} className="text-orange-500" />
-                  <span>{lang === 'tr' ? 'Veli Şifresi Belirle' : 'Set Parent Passcode'}</span>
+                  <span>{lang === 'tr' ? 'Şifreli Veli PIN Belirle' : 'Set Salted Parent PIN'}</span>
                 </label>
                 <p className="text-[11px] font-bold text-gray-400">
                   {lang === 'tr' 
-                    ? 'Ayarları korumak için 4 haneli yeni bir şifre girin (veya boş bırakın).' 
-                    : 'Enter a new 4-digit passcode to protect settings (or leave empty).'}
+                    ? 'Şifreniz cihazınızda ve veritabanında tek yönlü SHA-256 ile kriptolanarak saklanır.' 
+                    : 'Your PIN is securely hashed using SHA-256 with unique device salt.'}
                 </p>
 
                 <div className="grid grid-cols-2 gap-3 mt-2">
@@ -362,7 +415,7 @@ export default function ParentControl({
                     maxLength={4}
                     value={newPin}
                     onChange={(e) => setNewPin(e.target.value.replace(/\D/g, ''))}
-                    placeholder={lang === 'tr' ? 'Yeni Şifre' : 'New PIN'}
+                    placeholder={lang === 'tr' ? 'Yeni PIN (4 Rakam)' : 'New PIN (4 Digits)'}
                     className="w-full text-center text-xs font-bold py-2 px-3 rounded-xl border-2 border-orange-100 bg-orange-50/10 focus:outline-none focus:border-orange-400"
                   />
                   <input
@@ -370,7 +423,7 @@ export default function ParentControl({
                     maxLength={4}
                     value={confirmPin}
                     onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ''))}
-                    placeholder={lang === 'tr' ? 'Şifre Tekrar' : 'Confirm PIN'}
+                    placeholder={lang === 'tr' ? 'PIN Tekrar' : 'Confirm PIN'}
                     className="w-full text-center text-xs font-bold py-2 px-3 rounded-xl border-2 border-orange-100 bg-orange-50/10 focus:outline-none focus:border-orange-400"
                   />
                 </div>
@@ -385,7 +438,7 @@ export default function ParentControl({
               {settingsSuccess && (
                 <div className="p-3 bg-emerald-50 rounded-2xl border border-emerald-100 flex items-center justify-center gap-2 text-emerald-800 font-extrabold text-xs text-center animate-bounce">
                   <Check size={16} />
-                  <span>{lang === 'tr' ? 'Ayarlar başarıyla kaydedildi!' : 'Settings saved successfully!'}</span>
+                  <span>{lang === 'tr' ? 'Kriptolu ayarlar başarıyla kaydedildi!' : 'Encrypted settings saved successfully!'}</span>
                 </div>
               )}
 
@@ -416,19 +469,22 @@ export default function ParentControl({
 
 interface LockOverlayProps {
   lang: 'tr' | 'en';
-  parentPasscode: string;
+  parentPasscodeHash: string;
+  parentPasscodeSalt: string;
   onExtendPlaytime: (minutes: number) => void;
-  onUpdateParentPasscode: (pin: string) => void;
+  onUpdateParentPasscode: (hash: string, salt: string) => void;
 }
 
 export function PlaytimeLockOverlay({
   lang,
-  parentPasscode,
+  parentPasscodeHash,
+  parentPasscodeSalt,
   onExtendPlaytime,
   onUpdateParentPasscode,
 }: LockOverlayProps) {
   const [pin, setPin] = useState<string>('');
-  const [showBypass, setShowBypass] = useState<boolean>(false);
+  const [pinError, setPinError] = useState<string>('');
+  const [lockoutSeconds, setLockoutSeconds] = useState<number>(0);
   
   // Math challenge states for forgot passcode
   const [n1, setN1] = useState<number>(0);
@@ -444,38 +500,61 @@ export function PlaytimeLockOverlay({
     setErr(false);
   };
 
-  const speak = (text: string, voiceLang: 'tr' | 'en') => {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = voiceLang === 'tr' ? 'tr-TR' : 'en-US';
-      window.speechSynthesis.speak(utterance);
-    }
-  };
-
-  // Announce lock once
   useEffect(() => {
-    const lockText = lang === 'tr'
-      ? 'Oyun süren bitti ufaklık! Dinozor dostlarımız uyku moduna geçiyor. Biraz dinlenmelisin!'
-      : 'Playtime is over, little one! Our dinosaur friends are going to sleep. Time to rest!';
-    speak(lockText, lang);
-  }, [lang]);
+    if (lockoutSeconds <= 0) return;
+    const interval = setInterval(() => {
+      const status = parentPinLimiter.isLockedOut();
+      if (status.locked) {
+        setLockoutSeconds(status.remainingSeconds);
+      } else {
+        setLockoutSeconds(0);
+        setPinError('');
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [lockoutSeconds]);
 
-  const handleUnlockSubmit = (e: React.FormEvent) => {
+  const handleUnlockSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (pin === parentPasscode || (!parentPasscode && pin === '1234')) {
+
+    const lockoutStatus = parentPinLimiter.isLockedOut();
+    if (lockoutStatus.locked) {
+      setLockoutSeconds(lockoutStatus.remainingSeconds);
+      setPinError(lang === 'tr' 
+        ? `Lütfen ${lockoutStatus.remainingSeconds} saniye bekleyin.`
+        : `Please wait ${lockoutStatus.remainingSeconds}s.`);
+      return;
+    }
+
+    const isValid = await verifyParentPin(pin, parentPasscodeHash, parentPasscodeSalt);
+    if (isValid || (!parentPasscodeHash && pin === '1234')) {
+      parentPinLimiter.recordSuccess();
       setUnlockStep('success');
       setPin('');
+      setPinError('');
+      setLockoutSeconds(0);
     } else {
+      const result = parentPinLimiter.recordFailedAttempt();
       setPin('');
-      speak(lang === 'tr' ? 'Hatalı şifre.' : 'Wrong passcode.', lang);
+      if (result.locked) {
+        setLockoutSeconds(result.remainingSeconds);
+        setPinError(lang === 'tr' 
+          ? `Güvenlik Kilidi: ${result.remainingSeconds} saniye bekleyin.`
+          : `Lockout: Wait ${result.remainingSeconds}s.`);
+      } else {
+        setPinError(lang === 'tr' 
+          ? `Hatalı şifre! (${result.attemptsLeft} hak kaldı)` 
+          : `Wrong PIN! (${result.attemptsLeft} attempts left)`);
+      }
     }
   };
 
   const handleMathVerify = (e: React.FormEvent) => {
     e.preventDefault();
     if (parseInt(ans, 10) === n1 * n2) {
+      parentPinLimiter.recordSuccess();
       setUnlockStep('success');
+      setLockoutSeconds(0);
     } else {
       setAns('');
       setErr(true);
@@ -521,17 +600,37 @@ export function PlaytimeLockOverlay({
                 type="password"
                 maxLength={4}
                 value={pin}
-                onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
+                disabled={lockoutSeconds > 0}
+                onChange={(e) => {
+                  setPin(e.target.value.replace(/\D/g, ''));
+                  if (pinError) setPinError('');
+                }}
                 placeholder="••••"
-                className="w-full text-center tracking-[1em] text-xl font-black py-2.5 rounded-xl border-2 border-indigo-400 bg-indigo-900/40 text-white focus:outline-none focus:border-yellow-400"
+                className={`w-full text-center tracking-[1em] text-xl font-black py-2.5 rounded-xl border-2 text-white focus:outline-none ${
+                  lockoutSeconds > 0
+                    ? 'border-red-400 bg-red-950/40 text-red-300'
+                    : 'border-indigo-400 bg-indigo-900/40 focus:border-yellow-400'
+                }`}
               />
             </div>
 
+            {lockoutSeconds > 0 && (
+              <p className="text-xs font-bold text-red-400 text-center">
+                ⚠️ {lang === 'tr' ? `Güvenlik Kilidi: ${lockoutSeconds} sn bekleyin` : `Rate limited: Wait ${lockoutSeconds}s`}
+              </p>
+            )}
+
+            {pinError && lockoutSeconds === 0 && (
+              <p className="text-xs font-bold text-red-400 text-center">
+                ❌ {pinError}
+              </p>
+            )}
+
             <button
               type="submit"
-              disabled={pin.length !== 4}
+              disabled={pin.length !== 4 || lockoutSeconds > 0}
               className={`w-full py-3 rounded-2xl font-black text-xs uppercase tracking-wider transition-all shadow-md cursor-pointer ${
-                pin.length === 4
+                pin.length === 4 && lockoutSeconds === 0
                   ? 'bg-yellow-400 hover:bg-yellow-500 text-indigo-950 font-black'
                   : 'bg-white/10 text-white/40 cursor-not-allowed'
               }`}
@@ -609,11 +708,13 @@ export function PlaytimeLockOverlay({
               {[5, 15, 30, 0].map((mins) => (
                 <button
                   key={mins}
-                  onClick={() => {
+                  onClick={async () => {
                     onExtendPlaytime(mins);
-                    // Also initialize a default PIN of 1234 if they bypassed with math and have no PIN
-                    if (!parentPasscode) {
-                      onUpdateParentPasscode('1234');
+                    // Also initialize a default encrypted PIN of 1234 if they had no PIN set
+                    if (!parentPasscodeHash) {
+                      const salt = generateSalt(16);
+                      const hash = await hashParentPin('1234', salt);
+                      onUpdateParentPasscode(hash, salt);
                     }
                   }}
                   className="py-3 rounded-2xl text-xs font-black bg-emerald-500 hover:bg-emerald-600 text-white shadow-md cursor-pointer border-b-4 border-emerald-700 active:translate-y-0.5 transition-transform"

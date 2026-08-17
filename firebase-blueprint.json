@@ -1,17 +1,61 @@
 {
-  "collections": {
-    "users": {
-      "schema": {
-        "displayName": "string",
-        "email": "string",
-        "xp": "number",
-        "parentPasscode": "string",
-        "playtimeLimit": "number",
-        "createdAt": "string",
-        "lastActive": "string",
-        "lang": "string"
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and kid progress data with secure parent control settings",
+      "type": "object",
+      "properties": {
+        "displayName": {
+          "type": "string",
+          "description": "User display name",
+          "maxLength": 100
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address",
+          "maxLength": 150
+        },
+        "xp": {
+          "type": "number",
+          "description": "Earned learning points / XP"
+        },
+        "parentPasscodeHash": {
+          "type": "string",
+          "description": "SHA-256 salted hash of 4-digit parent passcode",
+          "maxLength": 128
+        },
+        "parentPasscodeSalt": {
+          "type": "string",
+          "description": "Cryptographic salt for parent passcode",
+          "maxLength": 64
+        },
+        "playtimeLimit": {
+          "type": "number",
+          "description": "Daily playtime limit in minutes"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp when account was created",
+          "maxLength": 40
+        },
+        "lastActive": {
+          "type": "string",
+          "description": "ISO timestamp of last activity",
+          "maxLength": 40
+        },
+        "lang": {
+          "type": "string",
+          "description": "Selected language (tr or en)",
+          "enum": ["tr", "en"]
+        }
       },
-      "indexes": []
+      "required": ["displayName", "xp", "createdAt", "lang"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Private user account documents restricted to owner only"
     }
   }
 }
