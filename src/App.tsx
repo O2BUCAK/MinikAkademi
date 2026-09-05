@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, Volume2, VolumeX, BookOpen, Hash, Palette, Edit2, Star, LogOut, UserCheck, Trophy, Shield } from 'lucide-react';
+import { Sparkles, Volume2, VolumeX, BookOpen, Hash, Palette, Edit2, Star, LogOut, UserCheck, Trophy, Shield, Mail, Copy, Check } from 'lucide-react';
 
 import { Language, ActiveTab, LetterItem } from './types';
 import { speak } from './utils/speak';
@@ -44,6 +44,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
   const [isKvkkOpen, setIsKvkkOpen] = useState<boolean>(false);
+  const [copiedEmail, setCopiedEmail] = useState<boolean>(false);
   
   // Track children's score/XP
   const [xp, setXp] = useState<number>(() => {
@@ -957,7 +958,58 @@ export default function App() {
       </main>
 
       {/* Educational & Privacy Footer */}
-      <footer className="max-w-6xl mx-auto px-4 mt-12 mb-6 text-center flex flex-col items-center gap-3">
+      <footer className="max-w-6xl mx-auto px-4 mt-12 mb-8 text-center flex flex-col items-center gap-4">
+        {/* Suggestion, Request & Feedback Contact Box */}
+        <div className="bg-amber-50/90 border-2 border-amber-200/80 rounded-2xl p-3.5 sm:px-5 sm:py-3 max-w-lg w-full shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-100 border border-amber-200 flex items-center justify-center text-amber-800 shrink-0">
+              <Mail size={20} />
+            </div>
+            <div>
+              <p className="text-xs font-black text-amber-950">
+                {lang === 'tr' ? 'Öneri, İstek & Görüşleriniz İçin' : 'Suggestions, Requests & Feedback'}
+              </p>
+              <p className="text-[11px] font-semibold text-amber-800/80 mt-0.5">
+                {lang === 'tr' 
+                  ? 'Fikirlerinizi bizimle paylaşabilirsiniz:' 
+                  : 'We would love to hear from you:'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            <a
+              href="mailto:ersin@ozbucak.com.tr?subject=Minik%20Akademi%20%C3%96neri%20ve%20G%C3%B6r%C3%BC%C5%9F"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 active:scale-95 text-white font-bold text-xs rounded-xl shadow-sm transition-all cursor-pointer"
+              title={lang === 'tr' ? 'E-posta Gönder' : 'Send Email'}
+            >
+              <Mail size={13} />
+              <span>ersin@ozbucak.com.tr</span>
+            </a>
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (navigator.clipboard) {
+                  navigator.clipboard.writeText('ersin@ozbucak.com.tr');
+                  setCopiedEmail(true);
+                  setTimeout(() => setCopiedEmail(false), 2000);
+                }
+              }}
+              type="button"
+              className="p-1.5 bg-amber-100 hover:bg-amber-200 text-amber-800 rounded-xl transition-all cursor-pointer relative"
+              title={lang === 'tr' ? 'E-postayı Kopyala' : 'Copy Email'}
+            >
+              {copiedEmail ? <Check size={14} className="text-emerald-600" /> : <Copy size={14} />}
+              {copiedEmail && (
+                <span className="absolute -top-7 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-[10px] font-bold px-2 py-0.5 rounded shadow whitespace-nowrap z-10">
+                  {lang === 'tr' ? 'Kopyalandı!' : 'Copied!'}
+                </span>
+              )}
+            </button>
+          </div>
+        </div>
+
         <p className="text-xs font-bold text-amber-600/80">
           {lang === 'tr' 
             ? '🎈 Çocukların gelişimine destek olmak için tasarlanmıştır. Tablet ve telefon uyumludur. 🎈' 
