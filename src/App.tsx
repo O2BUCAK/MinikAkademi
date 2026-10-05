@@ -22,6 +22,7 @@ import TransportSection from './components/TransportSection';
 import EmotionsSection from './components/EmotionsSection';
 import ColoringSection from './components/ColoringSection';
 import PuzzleSection from './components/PuzzleSection';
+import CookieConsent from './components/CookieConsent';
 
 import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/auth';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
@@ -406,20 +407,20 @@ export default function App() {
     setSoundEnabled(!soundEnabled);
   };
 
-  if (screen === 'welcome') {
-    return (
-      <div className="min-h-screen bg-[#FFF9E6] pb-12 font-sans selection:bg-orange-200 relative overflow-hidden">
-        {/* Decorative background clouds / suns */}
-        <div className="absolute top-4 left-10 pointer-events-none opacity-40 animate-pulse hidden sm:block text-2xl">☁️</div>
-        <div className="absolute top-24 right-16 pointer-events-none opacity-40 animate-bounce hidden sm:block text-3xl delay-300">☀️</div>
+  return (
+    <div className="min-h-screen bg-[#FFF9E6] pb-12 font-sans selection:bg-orange-200 relative overflow-x-hidden">
+      {/* Decorative background clouds / suns */}
+      <div className="absolute top-4 left-10 pointer-events-none opacity-40 animate-pulse hidden sm:block text-2xl">☁️</div>
+      <div className="absolute top-24 right-16 pointer-events-none opacity-40 animate-bounce hidden sm:block text-3xl delay-300">☀️</div>
 
+      {screen === 'welcome' ? (
         <WelcomeScreen
           lang={lang}
           soundEnabled={soundEnabled}
           onLanguageChange={handleLanguageChange}
           onToggleSound={handleToggleSound}
           onStartLearning={(subject) => {
-            setActiveTab(subject);
+            setActiveTab(subject as ActiveTab);
             setScreen('portal');
           }}
           xp={xp}
@@ -430,19 +431,10 @@ export default function App() {
           onOpenParentControl={() => setIsParentControlOpen(true)}
           playtimeLimit={playtimeLimit}
         />
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-[#FFF9E6] pb-12 font-sans selection:bg-orange-200 relative">
-      
-      {/* Decorative background clouds / suns */}
-      <div className="absolute top-4 left-10 pointer-events-none opacity-40 animate-pulse hidden sm:block text-2xl">☁️</div>
-      <div className="absolute top-24 right-16 pointer-events-none opacity-40 animate-bounce hidden sm:block text-3xl delay-300">☀️</div>
-
-      {/* Primary header portal in Vibrant Palette Style */}
-      <header className="h-auto md:h-20 bg-white border-b-4 border-orange-200 flex flex-col md:flex-row items-center justify-between px-4 sm:px-8 py-4 md:py-0 shrink-0 shadow-sm gap-4">
+      ) : (
+        <>
+          {/* Primary header portal in Vibrant Palette Style */}
+          <header className="h-auto md:h-20 bg-white border-b-4 border-orange-200 flex flex-col md:flex-row items-center justify-between px-4 sm:px-8 py-4 md:py-0 shrink-0 shadow-sm gap-4">
         <div className="flex items-center gap-4">
           <div 
             onClick={() => setScreen('welcome')}
@@ -956,9 +948,11 @@ export default function App() {
           </motion.div>
         </AnimatePresence>
       </main>
+    </>
+  )}
 
-      {/* Educational & Privacy Footer */}
-      <footer className="max-w-6xl mx-auto px-4 mt-12 mb-8 text-center flex flex-col items-center gap-4">
+  {/* Educational & Privacy Footer */}
+  <footer className="max-w-6xl mx-auto px-4 mt-12 mb-8 text-center flex flex-col items-center gap-4">
         {/* Suggestion, Request & Feedback Contact Box */}
         <div className="bg-amber-50/90 border-2 border-amber-200/80 rounded-2xl p-3.5 sm:px-5 sm:py-3 max-w-lg w-full shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left">
           <div className="flex items-center gap-3">
@@ -1049,18 +1043,21 @@ export default function App() {
               </div>
               <div className="text-xs text-gray-600 space-y-3 leading-relaxed">
                 <p>
-                  <strong>6698 Sayılı Kişisel Verilerin Korunması Kanunu (KVKK)</strong> ve çocukların dijital güvenliği esaslarına tam uyumlu olarak:
+                  <strong>6698 Sayılı Kişisel Verilerin Korunması Kanunu (KVKK)</strong> ve çocukların dijital güvenliği esaslarına (2026 Mevzuatı) tam uyumlu olarak:
                 </p>
-                <ul className="list-disc pl-4 space-y-1">
-                  <li><strong>Minimal Veri İlkesi:</strong> Çocuklara ait hiçbir özel nitelikli kişisel veri, biyometrik veri veya konum bilgisi toplanmaz.</li>
-                  <li><strong>Kriptografik Güvenlik:</strong> Veli şifreleri SHA-256 algoritması ve tuzlama (salt) ile tek yönlü kriptolanarak saklanır.</li>
-                  <li><strong>Satır Düzeyinde Güvenlik (Row-Level Security):</strong> Firestore güvenlik kuralları ile her kullanıcının verisi sadece kendi oturumuyla sınırlandırılmıştır.</li>
-                  <li><strong>Brute-Force & Bot Koruması:</strong> Veli paneli ardışık hatalı girişlerde otomatik güvenlik kilidi ve dinamik matematik doğrulama mekanizması uygular.</li>
-                  <li><strong>Güvenli İletişim:</strong> Tüm veri transferleri zorunlu HTTPS/TLS 1.3 şifrelemesi üzerinden yürütülür.</li>
+                <ul className="list-disc pl-4 space-y-1.5">
+                  <li><strong>Veri Sorumlusu & İletişim:</strong> Veri sorumlusu sıfatıyla her türlü soru, öneri ve KVKK Madde 11 kapsamındaki talepleriniz için <strong>ersin@ozbucak.com.tr</strong> adresinden doğrudan iletişime geçebilirsiniz.</li>
+                  <li><strong>Minimal Çocuk Verisi İlkesi:</strong> Çocuklara ait hiçbir özel nitelikli kişisel veri, kimlik numarası, biyometrik veri veya konum bilgisi toplanmaz veya işlenmez.</li>
+                  <li><strong>Çocuk Dostu Reklam Güvenliği (NPA):</strong> Google AdSense reklamları çocukların davranışsal profillenmesini engelleyen <em>Kişiselleştirilmemiş Reklam (Non-Personalized Ads - NPA)</em> modunda sunulur.</li>
+                  <li><strong>Kriptografik Güvenlik (PBKDF2 & SHA-256):</strong> Veli parolaları ve güvenlik anahtarları tuzlama (salt) ve 100.000 turluk PBKDF2/SHA-256 ile istemci tarafında tek yönlü özetlenerek saklanır.</li>
+                  <li><strong>Satır Düzeyinde Güvenlik (Row-Level Security):</strong> Firestore güvenlik kuralları ile her veli/öğrenci verisi sadece kendi Google oturumuyla kilitlenmiştir; toplu listeleme engellenmiştir.</li>
+                  <li><strong>Anti-Brute-Force & Bot Koruması:</strong> Veli paneli ardışık hatalı girişlerde kalıcı süre kilitlenmesi ve dinamik matematiksel doğrulama uygular.</li>
+                  <li><strong>İlgili Kişi Hakları (KVKK Madde 11):</strong> Veliler diledikleri an hesaplarını kapatma, verilerinin silinmesini talep etme ve kayıtlı verilerini inceleme hakkına sahiptir.</li>
                 </ul>
-                <p className="text-[11px] text-gray-400 pt-2 border-t">
-                  2026 Türkiye mevzuatına ve uluslararası çocuk verisi koruma standartlarına uygundur.
-                </p>
+                <div className="pt-2 border-t text-[11px] text-gray-500 flex flex-col gap-1">
+                  <span><strong>E-posta İletişim:</strong> ersin@ozbucak.com.tr</span>
+                  <span>Türkiye Cumhuriyeti 2026 Kişisel Verileri Koruma Kurumu rehberleri ve çocuk hakları mevzuatına uygundur.</span>
+                </div>
               </div>
               <button
                 onClick={() => setIsKvkkOpen(false)}
@@ -1103,6 +1100,12 @@ export default function App() {
           />
         )}
       </AnimatePresence>
+
+      {/* KVKK 2026 Compliant Cookie & Privacy Consent Banner */}
+      <CookieConsent 
+        lang={lang} 
+        onOpenPrivacyModal={() => setIsKvkkOpen(true)} 
+      />
     </div>
   );
 }

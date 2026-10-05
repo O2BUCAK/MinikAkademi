@@ -222,7 +222,8 @@ export default function WritingCanvas({ letter, word, emoji, lang, onBack, onEar
   const saveToHistory = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    setHistory((prev) => [...prev, canvas.toDataURL()]);
+    // Cap history to 15 snapshots to prevent memory bloat on mobile / tablet browsers
+    setHistory((prev) => [...prev.slice(-14), canvas.toDataURL()]);
   };
 
   const undo = () => {

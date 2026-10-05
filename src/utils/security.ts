@@ -60,31 +60,62 @@ export function generateSalt(length: number = 16): string {
 }
 
 /**
- * Hashes a PIN or sensitive string using SHA-256 and salt via Web Crypto API
+ * Cryptographic legacy single-round SHA-256 hash helper
  */
-export async function hashParentPin(pin: string, salt: string): Promise<string> {
+async function computeSha256(pin: string, salt: string): Promise<string> {
   const normalizedPin = pin.trim();
   const msgUint8 = new TextEncoder().encode(`${salt}::${normalizedPin}::minik_security_2026`);
-  
   if (typeof window !== 'undefined' && window.crypto && window.crypto.subtle) {
     const hashBuffer = await window.crypto.subtle.digest('SHA-256', msgUint8);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   }
-  
-  // Safe simple fallback hash for non-subtle contexts (e.g. mock SSR)
-  let hash = 0;
-  const str = `${salt}::${normalizedPin}`;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash |= 0;
-  }
-  return Math.abs(hash).toString(16).padStart(64, '0');
+  return '';
 }
 
 /**
- * Verifies a plain PIN against stored hash and salt
+ * Hashes a PIN using modern PBKDF2 (100,000 iterations, SHA-256) via Web Crypto API.
+ * Resilient against offline rainbow tables and brute-force attacks.
+ */
+export async function hashParentPin(pin: string, salt: string): Promise<string> {
+  const normalizedPin = pin.trim();
+  
+  if (typeof window !== 'undefined' && window.crypto && window.crypto.subtle) {
+    try {
+      const enc = new TextEncoder();
+      const keyMaterial = await window.crypto.subtle.importKey(
+        'raw',
+        enc.encode(`${normalizedPin}::minik_security_2026`),
+        { name: 'PBKDF2' },
+        false,
+        ['deriveBits']
+      );
+      const derivedBits = await window.crypto.subtle.deriveBits(
+        {
+          name: 'PBKDF2',
+          salt: enc.encode(salt || 'minik_salt_default'),
+          iterations: 100000,
+          hash: 'SHA-256',
+        },
+        keyMaterial,
+        256
+      );
+      const hashArray = Array.from(new Uint8Array(derivedBits));
+      return 'pbkdf2$' + hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch {
+      // Fallback to SHA-256 if PBKDF2 fails
+      return computeSha256(pin, salt);
+    }
+  }
+  
+  return computeSha256(pin, salt);
+}
+
+/**
+ * Verifies a plain PIN against stored hash and salt with backward-compatible format handling:
+ * 1. Plain 4-digit PIN (legacy fallback)
+ * 2. Modern PBKDF2 (prefix "pbkdf2$")
+ * 3. Salted SHA-256 (legacy 64-char hex)
  */
 export async function verifyParentPin(
   enteredPin: string,
@@ -93,17 +124,29 @@ export async function verifyParentPin(
 ): Promise<boolean> {
   if (!enteredPin || !storedHash) return false;
   
-  // If stored value is a legacy plain 4-digit PIN (e.g., "1234"), handle backward compatibility
+  // 1. If stored value is a legacy plain 4-digit PIN (e.g., "1234"), handle backward compatibility
   if (storedHash.length === 4 && /^\d{4}$/.test(storedHash)) {
     return enteredPin === storedHash;
   }
+
+  // 2. Modern PBKDF2 verification
+  if (storedHash.startsWith('pbkdf2$')) {
+    const computedHash = await hashParentPin(enteredPin, storedSalt || '');
+    return computedHash === storedHash;
+  }
   
-  const computedHash = await hashParentPin(enteredPin, storedSalt || '');
-  return computedHash === storedHash;
+  // 3. Salted single-round SHA-256 backward compatibility
+  const sha256Hash = await computeSha256(enteredPin, storedSalt || '');
+  if (sha256Hash === storedHash) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
- * Rate Limiter for PIN authentication attempts to prevent automated brute-force attacks
+ * Rate Limiter for PIN authentication attempts to prevent automated brute-force attacks.
+ * Persists lockout state to secureStorage to prevent evasion via browser reload.
  */
 class PinRateLimiter {
   private failedAttempts: number = 0;
@@ -111,7 +154,42 @@ class PinRateLimiter {
   private readonly MAX_ATTEMPTS = 5;
   private readonly LOCKOUT_DURATION_MS = 30000; // 30 seconds
 
+  constructor() {
+    this.restoreState();
+  }
+
+  private restoreState(): void {
+    try {
+      const savedLockout = secureStorage.get('pin_lockout_until');
+      const savedAttempts = secureStorage.get('pin_failed_attempts');
+      if (savedLockout) {
+        const lockoutTime = parseInt(savedLockout, 10);
+        if (!isNaN(lockoutTime) && lockoutTime > Date.now()) {
+          this.lockoutUntil = lockoutTime;
+        }
+      }
+      if (savedAttempts) {
+        const attempts = parseInt(savedAttempts, 10);
+        if (!isNaN(attempts)) {
+          this.failedAttempts = attempts;
+        }
+      }
+    } catch {
+      // In case of storage access issues
+    }
+  }
+
+  private persistState(): void {
+    try {
+      secureStorage.set('pin_lockout_until', this.lockoutUntil.toString());
+      secureStorage.set('pin_failed_attempts', this.failedAttempts.toString());
+    } catch {
+      // Storage quota or restriction
+    }
+  }
+
   public isLockedOut(): { locked: boolean; remainingSeconds: number } {
+    this.restoreState();
     const now = Date.now();
     if (this.lockoutUntil > now) {
       const remainingSeconds = Math.ceil((this.lockoutUntil - now) / 1000);
@@ -121,26 +199,31 @@ class PinRateLimiter {
       // Cooldown expired, reset attempts
       this.failedAttempts = 0;
       this.lockoutUntil = 0;
+      this.persistState();
     }
     return { locked: false, remainingSeconds: 0 };
   }
 
   public recordFailedAttempt(): { locked: boolean; remainingSeconds: number; attemptsLeft: number } {
+    this.restoreState();
     this.failedAttempts += 1;
     if (this.failedAttempts >= this.MAX_ATTEMPTS) {
       this.lockoutUntil = Date.now() + this.LOCKOUT_DURATION_MS;
+      this.persistState();
       return { locked: true, remainingSeconds: Math.ceil(this.LOCKOUT_DURATION_MS / 1000), attemptsLeft: 0 };
     }
+    this.persistState();
     return {
       locked: false,
       remainingSeconds: 0,
-      attemptsLeft: this.MAX_ATTEMPTS - this.failedAttempts,
+      attemptsLeft: Math.max(0, this.MAX_ATTEMPTS - this.failedAttempts),
     };
   }
 
   public recordSuccess(): void {
     this.failedAttempts = 0;
     this.lockoutUntil = 0;
+    this.persistState();
   }
 }
 
